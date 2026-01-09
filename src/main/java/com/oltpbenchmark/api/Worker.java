@@ -390,121 +390,196 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
      * implementing worker should return the TransactionType handle that was
      * executed.
      *
-     * @param databaseType    TODO
-     * @param transactionType TODO
+     * Uses time-based retry with exponential backoff for connection errors.
+     * This allows the workload to survive node failures, zone outages, and
+     * other transient connection issues.
+     *
+     * @param databaseType    The database type
+     * @param transactionType The transaction type to execute
      */
     protected final void doWork(DatabaseType databaseType, TransactionType transactionType) {
+        int retryCount = 0;
+        int maxRetryCount = configuration.getMaxRetries();
+        int retryDurationSeconds = configuration.getRetryDurationSeconds();
+        int initialBackoffMs = configuration.getRetryInitialBackoffMs();
+        int maxBackoffMs = configuration.getRetryMaxBackoffMs();
 
-        try {
-            int retryCount = 0;
-            int maxRetryCount = configuration.getMaxRetries();
+        // Track retry start time for time-based retry limit
+        long retryStartTime = 0;
+        boolean inRetryMode = false;
 
-            boolean autoCommitVal = false;
-            if (this.benchmark.getBenchmarkName().equalsIgnoreCase("featurebench") &&
-                this.benchmark.getWorkloadConfiguration().getXmlConfig().containsKey("microbenchmark/properties/setAutoCommit")) {
-                autoCommitVal = this.benchmark.getWorkloadConfiguration().getXmlConfig().getBoolean("microbenchmark/properties/setAutoCommit");
-            }
-
-            while (retryCount < maxRetryCount && this.workloadState.getGlobalState() != State.DONE) {
-
-                TransactionStatus status = TransactionStatus.UNKNOWN;
-
-                if (this.conn == null || this.conn.isClosed()) {
-                    try {
-                        this.conn = this.benchmark.makeConnection();
-                        this.conn.setAutoCommit(autoCommitVal);
-                        this.conn.setTransactionIsolation(this.configuration.getIsolationMode());
-                    } catch (SQLException ex) {
-                        if (LOG.isDebugEnabled()) {
-                            LOG.debug(String.format("%s failed to open a connection...", this));
-                        }
-                        retryCount++;
-                        continue;
-                    }
-                }
-
-                try {
-
-                    if (LOG.isDebugEnabled()) {
-                        LOG.debug(String.format("%s %s attempting...", this, transactionType));
-                    }
-
-                    status = this.executeWork(conn, transactionType);
-
-                    if (LOG.isDebugEnabled()) {
-                        LOG.debug(String.format("%s %s completed with status [%s]...", this, transactionType, status.name()));
-                    }
-
-                    if (LOG.isDebugEnabled()) {
-                        LOG.debug(String.format("%s %s committing...", this, transactionType));
-                    }
-
-                    if (!autoCommitVal)
-                        conn.commit();
-
-                    break;
-
-                } catch (UserAbortException ex) {
-                    if (!this.conn.isClosed() && !conn.getAutoCommit())
-                        conn.rollback();
-
-                    ABORT_LOG.debug(String.format("%s Aborted", transactionType), ex);
-
-                    status = TransactionStatus.USER_ABORTED;
-
-                    break;
-
-                } catch (SQLException ex) {
-                    if (!this.conn.isClosed() && !conn.getAutoCommit())
-                        conn.rollback();
-
-                    if (isRetryable(ex)) {
-                        LOG.debug(String.format("Retryable SQLException occurred during [%s]... current retry attempt [%d], max retry attempts [%d], sql state [%s], error code [%d].", transactionType, retryCount, maxRetryCount, ex.getSQLState(), ex.getErrorCode()), ex);
-
-                        status = TransactionStatus.RETRY;
-
-                        retryCount++;
-                    } else {
-                        LOG.debug(String.format("SQLException occurred during [%s] and will not be retried... sql state [%s], error code [%d], Message: %s.", transactionType, ex.getSQLState(), ex.getErrorCode(), ex.getMessage()));
-
-                        status = TransactionStatus.ERROR;
-
-                        break;
-                    }
-
-                } finally {
-                    if (this.configuration.getNewConnectionPerTxn() && this.conn != null && !this.conn.isClosed()) {
-                        try {
-                            this.conn.close();
-                            this.conn = null;
-                        } catch (SQLException e) {
-                            LOG.error("Connection couldn't be closed.", e);
-                        }
-                    }
-
-                    switch (status) {
-                        case UNKNOWN -> this.txnUnknown.put(transactionType);
-                        case SUCCESS -> this.txnSuccess.put(transactionType);
-                        case USER_ABORTED -> this.txnAbort.put(transactionType);
-                        case RETRY -> this.txnRetry.put(transactionType);
-                        case RETRY_DIFFERENT -> this.txtRetryDifferent.put(transactionType);
-                        case ERROR -> this.txnErrors.put(transactionType);
-                        case ZERO_ROWS -> this.txnZeroRows.put(transactionType);
-                    }
-
-                }
-
-            }
-        } catch (SQLException ex) {
-            String msg = String.format("Unexpected SQLException in '%s' when executing '%s' on [%s]", this, transactionType, databaseType.name());
-
-            throw new RuntimeException(msg, ex);
+        boolean autoCommitVal = false;
+        if (this.benchmark.getBenchmarkName().equalsIgnoreCase("featurebench") &&
+            this.benchmark.getWorkloadConfiguration().getXmlConfig().containsKey("microbenchmark/properties/setAutoCommit")) {
+            autoCommitVal = this.benchmark.getWorkloadConfiguration().getXmlConfig().getBoolean("microbenchmark/properties/setAutoCommit");
         }
 
+        while (this.workloadState.getGlobalState() != State.DONE) {
+            TransactionStatus status = TransactionStatus.UNKNOWN;
+
+            // Check time-based retry limit
+            if (inRetryMode && retryDurationSeconds > 0) {
+                long elapsedSeconds = (System.currentTimeMillis() - retryStartTime) / 1000;
+                if (elapsedSeconds > retryDurationSeconds) {
+                    LOG.error("{} retry duration exceeded ({} seconds) for {}. Giving up.",
+                        this, retryDurationSeconds, transactionType);
+                    this.txnErrors.put(transactionType);
+                    return;
+                }
+            }
+
+            // Establish connection if needed
+            try {
+                if (this.conn == null || this.conn.isClosed()) {
+                    this.conn = this.benchmark.makeConnection();
+                    this.conn.setAutoCommit(autoCommitVal);
+                    this.conn.setTransactionIsolation(this.configuration.getIsolationMode());
+
+                    if (inRetryMode) {
+                        LOG.info("{} successfully reconnected after {} retries", this, retryCount);
+                    }
+                }
+            } catch (SQLException connEx) {
+                // Connection failed - apply backoff and retry
+                if (!inRetryMode) {
+                    inRetryMode = true;
+                    retryStartTime = System.currentTimeMillis();
+                }
+
+                long backoffMs = calculateBackoff(retryCount, initialBackoffMs, maxBackoffMs);
+                LOG.warn("{} connection failed (attempt {}), retrying in {} ms: {}",
+                    this, retryCount + 1, backoffMs, connEx.getMessage());
+
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+
+                retryCount++;
+                continue;
+            }
+
+            // Execute transaction
+            try {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("{} {} attempting...", this, transactionType);
+                }
+
+                status = this.executeWork(conn, transactionType);
+
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("{} {} completed with status [{}]...", this, transactionType, status.name());
+                }
+
+                if (!autoCommitVal) {
+                    conn.commit();
+                }
+
+                // Success - reset retry state and exit loop
+                if (inRetryMode) {
+                    LOG.info("{} transaction {} succeeded after {} retries", this, transactionType, retryCount);
+                }
+                this.txnSuccess.put(transactionType);
+                return;
+
+            } catch (UserAbortException ex) {
+                safeRollback();
+                ABORT_LOG.debug("{} Aborted", transactionType, ex);
+                this.txnAbort.put(transactionType);
+                return;
+
+            } catch (SQLException ex) {
+                safeRollback();
+
+                if (isRetryable(ex)) {
+                    // Start retry timer on first retryable error
+                    if (!inRetryMode) {
+                        inRetryMode = true;
+                        retryStartTime = System.currentTimeMillis();
+                    }
+
+                    // Force reconnection for connection errors
+                    if (isConnectionError(ex)) {
+                        safeCloseConnection();
+                        LOG.warn("{} connection error during {} (attempt {}), will reconnect: [{}] {}",
+                            this, transactionType, retryCount + 1, ex.getSQLState(), ex.getMessage());
+                    } else {
+                        LOG.debug("{} retryable error during {} (attempt {}): [{}] {}",
+                            this, transactionType, retryCount + 1, ex.getSQLState(), ex.getMessage());
+                    }
+
+                    // Apply exponential backoff
+                    long backoffMs = calculateBackoff(retryCount, initialBackoffMs, maxBackoffMs);
+                    try {
+                        Thread.sleep(backoffMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+
+                    retryCount++;
+                    this.txnRetry.put(transactionType);
+
+                    // Check count-based limit as fallback (for non-connection errors)
+                    if (!isConnectionError(ex) && retryCount >= maxRetryCount) {
+                        LOG.error("{} max retry count ({}) exceeded for {}. Last error: [{}] {}",
+                            this, maxRetryCount, transactionType, ex.getSQLState(), ex.getMessage());
+                        this.txnErrors.put(transactionType);
+                        return;
+                    }
+                } else {
+                    // Non-retryable error
+                    LOG.warn("{} non-retryable error during {}: [{}] {}",
+                        this, transactionType, ex.getSQLState(), ex.getMessage());
+                    this.txnErrors.put(transactionType);
+                    return;
+                }
+
+            } finally {
+                // Close connection per transaction if configured
+                if (this.configuration.getNewConnectionPerTxn()) {
+                    safeCloseConnection();
+                }
+            }
+        }
     }
 
-    private boolean isRetryable(SQLException ex) {
+    /**
+     * Safely rollback the current transaction, ignoring errors.
+     */
+    private void safeRollback() {
+        try {
+            if (this.conn != null && !this.conn.isClosed() && !this.conn.getAutoCommit()) {
+                this.conn.rollback();
+            }
+        } catch (SQLException e) {
+            LOG.debug("Error during rollback: {}", e.getMessage());
+        }
+    }
 
+    /**
+     * Safely close the connection, ignoring errors.
+     */
+    private void safeCloseConnection() {
+        try {
+            if (this.conn != null && !this.conn.isClosed()) {
+                this.conn.close();
+            }
+        } catch (SQLException e) {
+            LOG.debug("Error closing connection: {}", e.getMessage());
+        }
+        this.conn = null;
+    }
+
+    /**
+     * Check if an SQLException is retryable (connection error or transient error).
+     *
+     * @param ex The SQLException to check
+     * @return true if the error is retryable
+     */
+    private boolean isRetryable(SQLException ex) {
         String sqlState = ex.getSQLState();
         int errorCode = ex.getErrorCode();
 
@@ -512,6 +587,50 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
 
         if (sqlState == null) {
             return false;
+        }
+
+        // ------------------
+        // CONNECTION ERRORS (always retryable) - Class 08 and 57P01
+        // https://www.postgresql.org/docs/current/errcodes-appendix.html
+        // ------------------
+        if (sqlState.startsWith("08")) {
+            // Class 08 — Connection Exception
+            // 08000 connection_exception
+            // 08003 connection_does_not_exist
+            // 08006 connection_failure
+            // 08001 sqlclient_unable_to_establish_sqlconnection
+            // 08004 sqlserver_rejected_establishment_of_sqlconnection
+            // 08007 transaction_resolution_unknown
+            // 08P01 protocol_violation
+            return true;
+        }
+
+        if (sqlState.equals("57P01")) {
+            // admin_shutdown - server is shutting down (e.g., during zone outage)
+            return true;
+        }
+
+        if (sqlState.equals("57P02")) {
+            // crash_shutdown - server crashed
+            return true;
+        }
+
+        if (sqlState.equals("57P03")) {
+            // cannot_connect_now - server is starting up
+            return true;
+        }
+
+        // ------------------
+        // TRANSACTION ERRORS (retryable)
+        // ------------------
+        if (sqlState.equals("40001")) {
+            // serialization_failure - transaction conflict, retry
+            return true;
+        }
+
+        if (sqlState.equals("40P01")) {
+            // deadlock_detected
+            return true;
         }
 
         // ------------------
@@ -523,16 +642,80 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
         } else if (errorCode == 1205 && sqlState.equals("41000")) {
             // MySQL ER_LOCK_WAIT_TIMEOUT
             return true;
-        } else if(errorCode > 0 && !sqlState.isEmpty()) {
-            // Added by Yugabyte to retry on all errors
-            return true;
         }
 
         // ------------------
-        // POSTGRES: https://www.postgresql.org/docs/current/errcodes-appendix.html
+        // YUGABYTE/COCKROACH specific errors
         // ------------------
-        // Postgres serialization_failure
-        return errorCode == 0 && sqlState.equals("40001");
+        if (sqlState.equals("40003")) {
+            // statement_completion_unknown - common in distributed DBs during failover
+            return true;
+        }
+
+        // Check for connection-related error messages
+        String message = ex.getMessage();
+        if (message != null) {
+            String lowerMessage = message.toLowerCase();
+            if (lowerMessage.contains("connection") ||
+                lowerMessage.contains("socket") ||
+                lowerMessage.contains("timeout") ||
+                lowerMessage.contains("broken pipe") ||
+                lowerMessage.contains("reset by peer") ||
+                lowerMessage.contains("no route to host") ||
+                lowerMessage.contains("network is unreachable")) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if this is a connection-related error that requires reconnection.
+     */
+    private boolean isConnectionError(SQLException ex) {
+        String sqlState = ex.getSQLState();
+        if (sqlState == null) {
+            return false;
+        }
+
+        // Connection class errors or shutdown errors require reconnection
+        if (sqlState.startsWith("08") ||
+            sqlState.equals("57P01") ||
+            sqlState.equals("57P02") ||
+            sqlState.equals("57P03")) {
+            return true;
+        }
+
+        // Also check message for connection keywords
+        String message = ex.getMessage();
+        if (message != null) {
+            String lowerMessage = message.toLowerCase();
+            return lowerMessage.contains("connection") ||
+                   lowerMessage.contains("socket") ||
+                   lowerMessage.contains("broken pipe") ||
+                   lowerMessage.contains("reset by peer");
+        }
+
+        return false;
+    }
+
+    /**
+     * Calculate exponential backoff with jitter.
+     *
+     * @param attempt Retry attempt number (0-based)
+     * @param initialBackoffMs Initial backoff in milliseconds
+     * @param maxBackoffMs Maximum backoff in milliseconds
+     * @return Backoff duration in milliseconds
+     */
+    private long calculateBackoff(int attempt, int initialBackoffMs, int maxBackoffMs) {
+        // Exponential backoff: initialBackoff * 2^attempt
+        long backoff = initialBackoffMs * (1L << Math.min(attempt, 10)); // Cap exponent to avoid overflow
+        backoff = Math.min(backoff, maxBackoffMs);
+
+        // Add jitter (±25%)
+        double jitter = 0.75 + (Math.random() * 0.5);
+        return (long) (backoff * jitter);
     }
 
     /**

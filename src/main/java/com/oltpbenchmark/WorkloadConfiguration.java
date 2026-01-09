@@ -39,6 +39,23 @@ public class WorkloadConfiguration {
     private int batchSize;
     private int maxRetries;
     private int randomSeed = -1;
+
+    /**
+     * Maximum duration to keep retrying on connection/transient errors (in seconds).
+     * Default: 14400 seconds (4 hours). Set to 0 to disable time-based retry.
+     */
+    private int retryDurationSeconds = 14400;
+
+    /**
+     * Initial backoff between retries in milliseconds.
+     * Uses exponential backoff: backoff = min(initialBackoff * 2^attempt, maxBackoff)
+     */
+    private int retryInitialBackoffMs = 1000;
+
+    /**
+     * Maximum backoff between retries in milliseconds.
+     */
+    private int retryMaxBackoffMs = 30000;
     private double scaleFactor = 1.0;
     private double selectivity = -1.0;
     private int terminals;
@@ -126,6 +143,30 @@ public class WorkloadConfiguration {
 
     public void setMaxRetries(int maxRetries) {
         this.maxRetries = maxRetries;
+    }
+
+    public int getRetryDurationSeconds() {
+        return retryDurationSeconds;
+    }
+
+    public void setRetryDurationSeconds(int retryDurationSeconds) {
+        this.retryDurationSeconds = retryDurationSeconds;
+    }
+
+    public int getRetryInitialBackoffMs() {
+        return retryInitialBackoffMs;
+    }
+
+    public void setRetryInitialBackoffMs(int retryInitialBackoffMs) {
+        this.retryInitialBackoffMs = retryInitialBackoffMs;
+    }
+
+    public int getRetryMaxBackoffMs() {
+        return retryMaxBackoffMs;
+    }
+
+    public void setRetryMaxBackoffMs(int retryMaxBackoffMs) {
+        this.retryMaxBackoffMs = retryMaxBackoffMs;
     }
 
     public String getConfigFilePath() {

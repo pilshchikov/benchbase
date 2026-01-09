@@ -10,6 +10,17 @@
     <isolation>TRANSACTION_REPEATABLE_READ</isolation>
     <batchsize>128</batchsize>
 
+    <!-- Retry configuration for connection/transient errors -->
+    <!-- retryDurationSeconds: Max time to retry connection errors (default: 14400 = 4 hours) -->
+    <!-- Set to 0 to disable time-based retry and use count-based retry only -->
+    <retryDurationSeconds>14400</retryDurationSeconds>
+    <!-- retryInitialBackoffMs: Initial backoff between retries (default: 1000ms) -->
+    <retryInitialBackoffMs>1000</retryInitialBackoffMs>
+    <!-- retryMaxBackoffMs: Maximum backoff between retries (default: 30000ms = 30s) -->
+    <retryMaxBackoffMs>30000</retryMaxBackoffMs>
+    <!-- retries: Max retry count for non-connection errors (default: 3) -->
+    <retries>3</retries>
+
     <!-- Scale factor is the number of warehouses in TPCC -->
     <scalefactor>1</scalefactor>
 

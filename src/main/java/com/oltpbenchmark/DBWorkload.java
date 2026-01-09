@@ -175,6 +175,9 @@ public class DBWorkload {
             wrkld.setRandomSeed(xmlConfig.getInt("randomSeed", -1));
             wrkld.setBatchSize(xmlConfig.getInt("batchsize", 128));
             wrkld.setMaxRetries(xmlConfig.getInt("retries", 3));
+            wrkld.setRetryDurationSeconds(xmlConfig.getInt("retryDurationSeconds", 14400)); // 4 hours default
+            wrkld.setRetryInitialBackoffMs(xmlConfig.getInt("retryInitialBackoffMs", 1000));
+            wrkld.setRetryMaxBackoffMs(xmlConfig.getInt("retryMaxBackoffMs", 30000));
             wrkld.setNewConnectionPerTxn(xmlConfig.getBoolean("newConnectionPerTxn", false));
 
             int terminals = xmlConfig.getInt("terminals[not(@bench)]", 0);
