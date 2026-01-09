@@ -24,15 +24,10 @@ jobs:
           cache: 'maven'
 
       - name: Build with Maven (YugabyteDB profile)
-        run: |
-          mvn -B clean package -P yugabyte -DskipTests
+        run: mvn -B clean package -P yugabyte -DskipTests
 
-      - name: Prepare release artifact
-        run: |
-          mkdir -p release
-          cp -r target/benchbase-yugabyte release/
-          cd release
-          tar -czvf benchbase-${{ github.event.inputs.version }}.tgz benchbase-yugabyte
+      - name: Rename artifact for release
+        run: mv target/benchbase-yugabyte.tgz target/benchbase-${{ github.event.inputs.version }}.tgz
 
       - name: Create Release
         id: create_release
@@ -56,6 +51,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./release/benchbase-${{ github.event.inputs.version }}.tgz
+          asset_path: ./target/benchbase-${{ github.event.inputs.version }}.tgz
           asset_name: benchbase-${{ github.event.inputs.version }}.tgz
           asset_content_type: application/gzip
