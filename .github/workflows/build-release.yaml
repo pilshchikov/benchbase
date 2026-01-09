@@ -6,11 +6,6 @@ on:
       version:
         description: 'Release version'
         required: true
-        default: ''
-      branch:
-        description: 'Branch to build from'
-        required: false
-        default: 'main'
 
 jobs:
   build-release:
@@ -20,8 +15,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -51,7 +44,7 @@ jobs:
           release_name: Benchbase Custom ${{ github.event.inputs.version }}
           body: |
             **Build info:**
-            - Branch: ${{ github.event.inputs.branch }}
+            - Branch: ${{ github.ref_name }}
             - Triggered by: ${{ github.actor }}
             - Commit: ${{ github.sha }}
           draft: false
