@@ -436,7 +436,7 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
                     this.conn.setTransactionIsolation(this.configuration.getIsolationMode());
 
                     if (inRetryMode) {
-                        LOG.info("{} successfully reconnected after {} retries", this, retryCount);
+                        LOG.debug("{} successfully reconnected after {} retries", this, retryCount);
                     }
                 }
             } catch (SQLException connEx) {
@@ -479,7 +479,7 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
 
                 // Success - reset retry state and exit loop
                 if (inRetryMode) {
-                    LOG.info("{} transaction {} succeeded after {} retries", this, transactionType, retryCount);
+                    LOG.debug("{} transaction {} succeeded after {} retries", this, transactionType, retryCount);
                 }
                 this.txnSuccess.put(transactionType);
                 return;

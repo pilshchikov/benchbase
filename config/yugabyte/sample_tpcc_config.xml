@@ -9,6 +9,7 @@
     <password></password>
     <isolation>TRANSACTION_REPEATABLE_READ</isolation>
     <batchsize>128</batchsize>
+    <loaderThreads>16</loaderThreads>
 
     <!-- Retry configuration for connection/transient errors -->
     <!-- retryDurationSeconds: Max time to retry connection errors (default: 14400 = 4 hours) -->
