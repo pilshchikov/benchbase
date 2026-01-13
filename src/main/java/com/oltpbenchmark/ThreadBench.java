@@ -19,6 +19,7 @@ package com.oltpbenchmark;
 
 import com.oltpbenchmark.LatencyRecord.Sample;
 import com.oltpbenchmark.api.BenchmarkModule;
+import com.oltpbenchmark.api.Procedure;
 import com.oltpbenchmark.api.TransactionType;
 import com.oltpbenchmark.api.Worker;
 import com.oltpbenchmark.types.State;
@@ -524,6 +525,7 @@ public class ThreadBench implements Thread.UncaughtExceptionHandler {
 
     private class MonitorThread extends Thread {
         private final int intervalMonitor;
+        private long lastOperationsCount = 0;
 
         {
             this.setDaemon(true);
@@ -539,6 +541,7 @@ public class ThreadBench implements Thread.UncaughtExceptionHandler {
         @Override
         public void run() {
             LOG.info("Starting MonitorThread Interval [{}ms]", this.intervalMonitor);
+            lastOperationsCount = Procedure.getOperationsCount();
             while (true) {
                 try {
                     Thread.sleep(this.intervalMonitor);
@@ -546,16 +549,30 @@ public class ThreadBench implements Thread.UncaughtExceptionHandler {
                     return;
                 }
 
-                // Compute the last throughput
+                // Compute the last throughput and latency
                 long measuredRequests = 0;
+                long totalLatencyMicros = 0;
                 synchronized (testState) {
                     for (Worker<?> w : workers) {
                         measuredRequests += w.getAndResetIntervalRequests();
+                        totalLatencyMicros += w.getAndResetIntervalLatencyMicros();
                     }
                 }
                 double seconds = this.intervalMonitor / 1000d;
                 double tps = (double) measuredRequests / seconds;
-                LOG.info("Throughput: {} txn/sec", tps);
+
+                // Compute average latency in milliseconds
+                double avgLatencyMs = measuredRequests > 0
+                    ? (double) totalLatencyMicros / measuredRequests / 1000.0
+                    : 0.0;
+
+                // Compute operations per second
+                long currentOps = Procedure.getOperationsCount();
+                long deltaOps = currentOps - lastOperationsCount;
+                lastOperationsCount = currentOps;
+                double ops = (double) deltaOps / seconds;
+
+                LOG.info("Throughput: {} txn/sec | Operations: {} ops/sec | Latency: {} ms", tps, ops, avgLatencyMs);
             }
         }
     }

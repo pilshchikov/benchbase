@@ -35,6 +35,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static com.oltpbenchmark.types.State.MEASURE;
 
@@ -47,8 +48,9 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
     protected final Map<String, Procedure> name_procedures = new HashMap<>();
     protected final Map<Class<? extends Procedure>, Procedure> class_procedures = new HashMap<>();
     private final Statement currStatement;
-    // Interval requests used by the monitor
+    // Interval requests and latency used by the monitor
     private final AtomicInteger intervalRequests = new AtomicInteger(0);
+    private final AtomicLong intervalLatencyMicros = new AtomicLong(0);
     private final int id;
     private final T benchmark;
     private final Histogram<TransactionType> txnUnknown = new Histogram<>();
@@ -130,6 +132,10 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
 
     public final int getAndResetIntervalRequests() {
         return intervalRequests.getAndSet(0);
+    }
+
+    public final long getAndResetIntervalLatencyMicros() {
+        return intervalLatencyMicros.getAndSet(0);
     }
 
     public final Iterable<LatencyRecord.Sample> getLatencyRecords() {
@@ -314,6 +320,9 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
                                 latencies.addLatency(transactionType.getId(), start, end, this.id, prePhase.getId());
                             }
                             intervalRequests.incrementAndGet();
+                            // Track interval latency in microseconds for monitor
+                            long latencyMicros = (end - start + 500) / 1000;
+                            intervalLatencyMicros.addAndGet(latencyMicros);
                         }
                         if (prePhase.isLatencyRun()) {
                             workloadState.startColdQuery();
