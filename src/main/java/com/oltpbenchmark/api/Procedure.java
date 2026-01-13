@@ -18,6 +18,7 @@
 package com.oltpbenchmark.api;
 
 import com.oltpbenchmark.jdbc.AutoIncrementPreparedStatement;
+import com.oltpbenchmark.jdbc.CountingPreparedStatement;
 import com.oltpbenchmark.types.DatabaseType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,9 +32,16 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 public abstract class Procedure {
     private static final Logger LOG = LoggerFactory.getLogger(Procedure.class);
+
+    /**
+     * Global counter for all SQL operations executed through getPreparedStatement.
+     * Thread-safe using AtomicLong.
+     */
+    private static final AtomicLong GLOBAL_OPERATIONS_COUNTER = new AtomicLong(0);
 
     private final String procName;
     private DatabaseType dbType;
@@ -44,6 +52,30 @@ public abstract class Procedure {
      */
     protected Procedure() {
         this.procName = this.getClass().getSimpleName();
+    }
+
+    /**
+     * Get the current global operations count.
+     * @return total number of SQL operations executed
+     */
+    public static long getOperationsCount() {
+        return GLOBAL_OPERATIONS_COUNTER.get();
+    }
+
+    /**
+     * Reset the global operations counter to zero.
+     * @return the value before reset
+     */
+    public static long resetOperationsCount() {
+        return GLOBAL_OPERATIONS_COUNTER.getAndSet(0);
+    }
+
+    /**
+     * Get the operations counter for use by CountingPreparedStatement.
+     * @return the AtomicLong counter
+     */
+    static AtomicLong getOperationsCounter() {
+        return GLOBAL_OPERATIONS_COUNTER;
     }
 
     /**
@@ -121,8 +153,8 @@ public abstract class Procedure {
             pStmt = conn.prepareStatement(stmt.getSQL());
         }
 
-
-        return (pStmt);
+        // Wrap with CountingPreparedStatement to track operations
+        return new CountingPreparedStatement(pStmt, GLOBAL_OPERATIONS_COUNTER);
     }
 
     /**

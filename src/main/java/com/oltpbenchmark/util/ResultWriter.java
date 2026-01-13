@@ -21,6 +21,7 @@ import com.oltpbenchmark.DistributionStatistics;
 import com.oltpbenchmark.LatencyRecord;
 import com.oltpbenchmark.Results;
 import com.oltpbenchmark.ThreadBench;
+import com.oltpbenchmark.api.Procedure;
 import com.oltpbenchmark.api.TransactionType;
 import com.oltpbenchmark.api.collectors.DBParameterCollector;
 import com.oltpbenchmark.api.collectors.DBParameterCollectorGen;
@@ -132,14 +133,23 @@ public class ResultWriter {
                 "95th Percentile Latency (millisecond)",
                 "99th Percentile Latency (millisecond)",
                 "Maximum Latency (millisecond)",
-                "tp (req/s) scaled"
+                "tp (req/s) scaled",
+                "Operations (ops/second)"
         };
         out.println(StringUtil.join(",", header));
+
+        // Calculate operations per request ratio for estimating ops per window
+        long totalOperations = Procedure.getOperationsCount();
+        int totalRequests = results.getMeasuredRequests();
+        double opsPerRequest = totalRequests > 0 ? (double) totalOperations / totalRequests : 0;
+
         int i = 0;
         for (DistributionStatistics s : new ThreadBench.TimeBucketIterable(results.getLatencySamples(), windowSizeSeconds, txType)) {
-            out.printf("%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+            double requestsPerSecond = (double) s.getCount() / windowSizeSeconds;
+            double opsPerSecond = requestsPerSecond * opsPerRequest;
+            out.printf("%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
                     i * windowSizeSeconds,
-                    (double) s.getCount() / windowSizeSeconds,
+                    requestsPerSecond,
                     s.getAverage() / MILLISECONDS_FACTOR,
                     s.getMinimum() / MILLISECONDS_FACTOR,
                     s.get25thPercentile() / MILLISECONDS_FACTOR,
@@ -149,7 +159,8 @@ public class ResultWriter {
                     s.get95thPercentile() / MILLISECONDS_FACTOR,
                     s.get99thPercentile() / MILLISECONDS_FACTOR,
                     s.getMaximum() / MILLISECONDS_FACTOR,
-                    MILLISECONDS_FACTOR / s.getAverage());
+                    MILLISECONDS_FACTOR / s.getAverage(),
+                    opsPerSecond);
             i += 1;
         }
     }
@@ -256,6 +267,7 @@ public class ResultWriter {
         transactionsMap.put("Unknown Status Transactions", results.getUnknown().getSampleCount());
         transactionsMap.put("Zero Rows Returned", results.getZeroRows().getSampleCount());
         transactionsMap.put("Total measured requests", results.getMeasuredRequests());
+        transactionsMap.put("Total SQL Operations", Procedure.getOperationsCount());
         return transactionsMap;
     }
 
@@ -287,6 +299,11 @@ public class ResultWriter {
         summaryMap.put("Latency Distribution", results.getDistributionStatistics().toMap());
         summaryMap.put("Throughput (requests/second)", results.requestsPerSecondThroughput());
         summaryMap.put("Goodput (requests/second)", results.requestsPerSecondGoodput());
+        // Add operations metrics
+        long totalOperations = Procedure.getOperationsCount();
+        summaryMap.put("Total SQL Operations", totalOperations);
+        double operationsPerSecond = (double) totalOperations / (double) results.getNanoseconds() * 1e9;
+        summaryMap.put("Operations (ops/second)", operationsPerSecond);
         return summaryMap;
     }
 
