@@ -307,9 +307,15 @@ public abstract class BenchmarkModule {
         try (Connection conn = this.makeConnection()) {
             Loader<? extends BenchmarkModule> loader = this.makeLoaderImpl();
             if (loader != null) {
-                conn.setAutoCommit(false);
+                // Cassandra doesn't support transactions
+                boolean useTransaction = this.workConf.getDatabaseType() != DatabaseType.CASSANDRA;
+                if (useTransaction) {
+                    conn.setAutoCommit(false);
+                }
                 loader.unload(conn, this.catalog);
-                conn.commit();
+                if (useTransaction) {
+                    conn.commit();
+                }
             }
         }
     }

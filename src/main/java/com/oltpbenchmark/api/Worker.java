@@ -84,7 +84,10 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
             try {
                 this.conn = this.benchmark.makeConnection();
                 this.conn.setAutoCommit(autoCommitVal);
-                this.conn.setTransactionIsolation(this.configuration.getIsolationMode());
+                // Cassandra doesn't support transactions - skip setTransactionIsolation
+                if (this.configuration.getDatabaseType() != DatabaseType.CASSANDRA) {
+                    this.conn.setTransactionIsolation(this.configuration.getIsolationMode());
+                }
             } catch (SQLException ex) {
                 throw new RuntimeException("Failed to connect to database", ex);
             }
@@ -442,7 +445,10 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
                 if (this.conn == null || this.conn.isClosed()) {
                     this.conn = this.benchmark.makeConnection();
                     this.conn.setAutoCommit(autoCommitVal);
-                    this.conn.setTransactionIsolation(this.configuration.getIsolationMode());
+                    // Cassandra doesn't support transactions - skip setTransactionIsolation
+                    if (this.configuration.getDatabaseType() != DatabaseType.CASSANDRA) {
+                        this.conn.setTransactionIsolation(this.configuration.getIsolationMode());
+                    }
 
                     if (inRetryMode) {
                         LOG.debug("{} successfully reconnected after {} retries", this, retryCount);
