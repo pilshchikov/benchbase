@@ -426,6 +426,7 @@ public abstract class SQLUtil {
             case NOISEPAGE: // fall-through
             case SQLITE:
             case HSQLDB:
+            case CASSANDRA: // Cassandra doesn't support SQL metadata operations like getImportedKeys
                 return getCatalogHSQLDB(benchmarkModule);
             default:
                 return getCatalogDirect(databaseType, connection);
