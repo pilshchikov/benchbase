@@ -552,6 +552,36 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
                     return;
                 }
 
+            } catch (RuntimeException ex) {
+                // Handle Cassandra/ScyllaDB driver exceptions that escape as RuntimeException
+                // (e.g., ClosedConnectionException, ReadFailureException when not wrapped in SQLException)
+                safeRollback();
+
+                if (isRetryableRuntimeException(ex)) {
+                    if (!inRetryMode) {
+                        inRetryMode = true;
+                        retryStartTime = System.currentTimeMillis();
+                    }
+
+                    safeCloseConnection();
+                    LOG.warn("{} Cassandra driver error during {} (attempt {}), will reconnect: {}",
+                        this, transactionType, retryCount + 1, ex.getMessage());
+
+                    long backoffMs = calculateBackoff(retryCount, initialBackoffMs, maxBackoffMs);
+                    try {
+                        Thread.sleep(backoffMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+
+                    retryCount++;
+                    this.txnRetry.put(transactionType);
+                } else {
+                    // Non-retryable runtime exception - rethrow to crash the worker
+                    throw ex;
+                }
+
             } finally {
                 // Close connection per transaction if configured
                 if (this.configuration.getNewConnectionPerTxn()) {
@@ -708,6 +738,62 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
                 causeName.contains("writetimeout") ||
                 causeName.contains("unavailable") ||
                 causeName.contains("nonodeavailable")) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if a RuntimeException is retryable (Cassandra/ScyllaDB driver exceptions).
+     * These exceptions can escape the JDBC wrapper and need to be handled separately.
+     *
+     * @param ex The RuntimeException to check
+     * @return true if the error is retryable
+     */
+    private boolean isRetryableRuntimeException(RuntimeException ex) {
+        // Check exception class name
+        String className = ex.getClass().getName().toLowerCase();
+        if (className.contains("closedconnection") ||
+            className.contains("readfailure") ||
+            className.contains("writefailure") ||
+            className.contains("readtimeout") ||
+            className.contains("writetimeout") ||
+            className.contains("unavailable") ||
+            className.contains("nonodeavailable") ||
+            className.contains("driverexception") ||
+            className.contains("queryexecution") ||
+            className.contains("allnodesFailedException")) {
+            return true;
+        }
+
+        // Check error message
+        String message = ex.getMessage();
+        if (message != null) {
+            String lowerMessage = message.toLowerCase();
+            if (lowerMessage.contains("connection") ||
+                lowerMessage.contains("lost connection") ||
+                lowerMessage.contains("closed") ||
+                lowerMessage.contains("cassandra failure") ||
+                lowerMessage.contains("replica") ||
+                lowerMessage.contains("timeout") ||
+                lowerMessage.contains("unavailable") ||
+                lowerMessage.contains("no node available")) {
+                return true;
+            }
+        }
+
+        // Check cause chain
+        Throwable cause = ex.getCause();
+        while (cause != null) {
+            String causeName = cause.getClass().getName().toLowerCase();
+            if (causeName.contains("cassandra") ||
+                causeName.contains("datastax") ||
+                causeName.contains("closedconnection") ||
+                causeName.contains("readfailure") ||
+                causeName.contains("unavailable")) {
                 return true;
             }
             cause = cause.getCause();
