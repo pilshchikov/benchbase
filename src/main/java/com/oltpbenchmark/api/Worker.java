@@ -680,6 +680,37 @@ public abstract class Worker<T extends BenchmarkModule> implements Runnable {
                 lowerMessage.contains("network is unreachable")) {
                 return true;
             }
+
+            // ------------------
+            // CASSANDRA/SCYLLADB specific errors (from DataStax driver)
+            // These are transient errors that can occur during node failures and should be retried
+            // ------------------
+            if (lowerMessage.contains("readfailureexception") ||
+                lowerMessage.contains("writefailureexception") ||
+                lowerMessage.contains("readtimeoutexception") ||
+                lowerMessage.contains("writetimeoutexception") ||
+                lowerMessage.contains("unavailableexception") ||
+                lowerMessage.contains("nonodeavailableexception") ||
+                lowerMessage.contains("cassandra failure") ||
+                lowerMessage.contains("replica responded") ||
+                lowerMessage.contains("replica failed")) {
+                return true;
+            }
+        }
+
+        // Check cause chain for Cassandra driver exceptions
+        Throwable cause = ex.getCause();
+        while (cause != null) {
+            String causeName = cause.getClass().getSimpleName().toLowerCase();
+            if (causeName.contains("readfailure") ||
+                causeName.contains("writefailure") ||
+                causeName.contains("readtimeout") ||
+                causeName.contains("writetimeout") ||
+                causeName.contains("unavailable") ||
+                causeName.contains("nonodeavailable")) {
+                return true;
+            }
+            cause = cause.getCause();
         }
 
         return false;
