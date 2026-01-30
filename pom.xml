@@ -139,17 +139,40 @@
                     <artifactId>cockroachdb-jdbc</artifactId>
                     <version>2.0.1</version>
                 </dependency>
-                <!-- MySQL driver for TiDB support -->
+                <!-- TiDB-JDBC: patched MySQL connector with TiDB-specific fixes -->
+                <!-- Fixes multi-parameter EOF bug in prepare mode, adds SM3 auth -->
                 <dependency>
-                    <groupId>com.mysql</groupId>
-                    <artifactId>mysql-connector-j</artifactId>
-                    <version>8.0.33</version>
+                    <groupId>io.github.lastincisor</groupId>
+                    <artifactId>mysql-connector-java</artifactId>
+                    <version>8.0.29-tidb-1.0.2</version>
                 </dependency>
-                <!-- Cassandra JDBC wrapper for Cassandra/ScyllaDB support -->
+                <!-- Cassandra JDBC wrapper with ScyllaDB shard-aware driver -->
+                <!-- Excludes DataStax driver, uses ScyllaDB fork for shard-aware routing -->
                 <dependency>
                     <groupId>com.ing.data</groupId>
                     <artifactId>cassandra-jdbc-wrapper</artifactId>
                     <version>4.12.0</version>
+                    <exclusions>
+                        <exclusion>
+                            <groupId>com.datastax.oss</groupId>
+                            <artifactId>java-driver-core</artifactId>
+                        </exclusion>
+                        <exclusion>
+                            <groupId>com.datastax.oss</groupId>
+                            <artifactId>java-driver-query-builder</artifactId>
+                        </exclusion>
+                    </exclusions>
+                </dependency>
+                <!-- ScyllaDB shard-aware CQL driver (API-compatible fork of DataStax 4.17.0) -->
+                <dependency>
+                    <groupId>com.scylladb</groupId>
+                    <artifactId>java-driver-core</artifactId>
+                    <version>4.17.0.0</version>
+                </dependency>
+                <dependency>
+                    <groupId>com.scylladb</groupId>
+                    <artifactId>java-driver-query-builder</artifactId>
+                    <version>4.17.0.0</version>
                 </dependency>
             </dependencies>
         </profile>
